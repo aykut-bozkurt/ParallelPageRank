@@ -222,7 +222,7 @@ void normalize(float ** P){
 			rowsum += P[i][j];
 		}
 		for(j=0 ; j < N ; j++){
-			P[i][j] = P[i][j]/rowsum;
+			P[i][j] = ( 0.1*rowsum/N + 0.9*P[i][j] )/rowsum;
 		}
 	}
 }
