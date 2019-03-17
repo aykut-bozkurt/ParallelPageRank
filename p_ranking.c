@@ -7,8 +7,9 @@
  
 #define N 5
 #define ALPHA 0.2
-#define BETA 0.8
 #define EPSILON 0.000001
+
+typedef struct CSRMatrix matrix;
 
 struct CSRMatrix {
    int n_rows;
@@ -20,20 +21,12 @@ struct CSRMatrix {
 
 int readinputs(FILE *fptr, int *rowstarts, float *values, int *colindices);
 
-float ** getP(int rowstartssize, int *rowstarts, int *values, int *colindices);
+void normalize(matrix P);
 
-void normalize(float ** P);
-
-// ALGORITHM
-// r(t+1) = 0.2*P*r(t) + 0.8*c   ; c = r(0) = r 
-// r1 = 0.2*(P*r) + 0.8*(r)     r2 = 0.2^2*(P^2*r) + 0.2*0.8*(P*r) + 0.8*(r)   r3 = 0.2^3*(P^3*r) + 0.2^2*0.8*(P^2*r) + 0.2*0.8*(P*r) + 0.8*(r)
-// 1. diff(r2 - r1) = [ 0.2^2*(P^2*r) - 0.2*(P*r) ] + 0.2*0.8*(P*r)
-// 2. diff(r3 - r2) = [ 0.2^3*(P^3*r) - 0.2^2*(P^2*r) ] + 0.2^2*0.8*(P^2*r)   
-
+// ALGORITHM => r(t+1) = alpha*P*r + (1-alpha)*c ; c = r = [1,...,1] ; alpha = 0.2
  int main() {
 
-    struct CSRMatrix P;
-    //printf("Here");
+    matrix P;
     P.rowstarts = (int*)calloc(N+1, sizeof(int));
     P.colindices = (int*)calloc(N*N, sizeof(int));
     P.values = (float*)calloc(N*N, sizeof(float));
@@ -56,14 +49,12 @@ void normalize(float ** P);
     k = readinputs(fptr, P.rowstarts, P.values, P.colindices);
     fclose(fptr);
     
-    // construct P matrix
-    //P = getP(k, rowstarts, values, colindices);
-    //normalize(P);
-    
+    // normalize P matrix values (each row sum = 1.0 total probability)
+    normalize(P);
 
     /* Some initializations */
     for (i=0; i<N; i++) {
-        r[i] = 1.0/N;
+        r[i] = 1.0;
     }
 
     time_t t;
@@ -75,18 +66,20 @@ void normalize(float ** P);
         #pragma omp parallel shared(P, r, nextR) private(i, j, k)
         {
             t0 = omp_get_wtime();
-            // calculate nextP
-            #pragma omp for
+
+            // calculate nextR
+            //#pragma omp for 
+	     #pragma omp single
+	     {
              for(i=0; i<N; i++){
                  for(k=P.rowstarts[i]; k<P.rowstarts[i+1]; k++){
-                     nextR[i] = nextR[i] + ALPHA*P.values[k]*r[P.colindices[k]];
+                     nextR[i] = nextR[i] + ALPHA*P.values[k]*1 + (1-ALPHA);
                  }
-                 //printf("%0.6f \n", nextR[i]);
-                 nextR[i] = nextR[i] + (1-ALPHA)/N;
-                 //printf("%0.6f \n ", (1-ALPHA)/N);
+                 //nextR[i] = nextR[i] + (1-ALPHA)/N;
              }
+	    }
 
-            // calculate totalDiff
+            // calculate totalDiff to compare with epsilon
             #pragma omp for reduction(+:totalDiff)
             for(i=0; i<N; i++){
                 totalDiff +=  fabs( nextR[i] - r[i] );
@@ -98,7 +91,6 @@ void normalize(float ** P);
 
         printf("Step: %d\n", step);
         printf("%.6f\n", totalDiff);
-        //break;
 
         if(totalDiff <= EPSILON) break;
         
@@ -117,9 +109,9 @@ void normalize(float ** P);
     }
     
     // free unused heap memory
-    //free(P.rowstarts);
-    //free(P.colindices);
-    //free(P.values);
+    /*free(P.rowstarts);
+    free(P.colindices);
+    free(P.values);*/
     free(r);
  }
 
@@ -128,7 +120,7 @@ int readinputs(FILE *fptr, int *rowstarts, float *values, int *colindices){
     const char* delim = " ";
     char * line;
     size_t len = 0;
-        ssize_t read = 0;
+    ssize_t read = 0;
     
     int k = 0;
     int l = 0;
@@ -163,15 +155,16 @@ int readinputs(FILE *fptr, int *rowstarts, float *values, int *colindices){
     return k;
 }
 
-void normalize(float ** P){
-    int i,j;
-    for(i=0 ; i<N ; i++){
-        float rowsum = 0;
-        for(j=0 ; j < N ; j++){
-            rowsum += P[i][j];
-        }
-        for(j=0 ; j < N ; j++){
-            P[i][j] = ( 0.1*rowsum/N + 0.9*P[i][j] )/rowsum;
-        }
-    }
+void normalize(matrix P){
+	int i,k;
+	for(k=0;k<N;k++){
+		float rowsum = 0;
+		for(i=P.rowstarts[k]; i<P.rowstarts[k+1]; i++){
+			rowsum += P.values[i];
+		}
+		for(i=P.rowstarts[k]; i<P.rowstarts[k+1]; i++){
+			P.values[i] = P.values[i]/rowsum;
+		}
+	}
 }
+
