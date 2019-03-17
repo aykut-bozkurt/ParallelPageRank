@@ -34,7 +34,8 @@ void normalize(matrix P);
     float * r = (float*)calloc(N, sizeof(float));
     float * nextR = (float*)calloc(N, sizeof(float));
     
-    int i, j, k, step, stop;
+    int i, j, k, step;
+    float totalDiff;
 
     // read matrix file
     FILE *fptr;
@@ -53,14 +54,15 @@ void normalize(matrix P);
 
     /* Some initializations */
     for (i=0; i<N; i++) {
-        r[i] = 1.0;
+        r[i] = 1.0/N;
     }
+    
 
     time_t t;
     srand((unsigned) time(&t));
     float t0,t1;
     step = 1;
-    stop = 1;
+    
     while(1){
         #pragma omp parallel shared(P, r, nextR) private(i, j, k)
         {
@@ -70,32 +72,34 @@ void normalize(matrix P);
             #pragma omp for
             for(i=0; i<N; i++){
             	for(k=P.rowstarts[i]; k<P.rowstarts[i+1]; k++){
-                	nextR[i] = nextR[i] + ALPHA*P.values[k]*r[P.colindices[k]] + (1-ALPHA)*1;
+                	nextR[i] += ALPHA*P.values[k]*r[P.colindices[k]];
                 }
+
+                nextR[i] += (1-ALPHA)/N;
             }
 
-            // calculate difference to compare with epsilon
-            #pragma omp for
-            for(i=0; i<N; i++){
-                if( fabs( nextR[i] - r[i] ) > EPSILON){
-			stop = 0;
-			//break;
-		}
-            }
+            
 
             t1 = omp_get_wtime();
             printf("Thread%d spent %f secs in the parallel region.\n", omp_get_thread_num(), t1-t0);
         } // end of parallel section
-
-        printf("Step: %d\n", step);
-        if(stop == 1) break;
         
-        // update iteration variables
+        // calculate difference to compare with epsilon
+            for(i=0; i<N; i++){
+                totalDiff += fabs(r[i]-nextR[i]);
+            }
+        printf("Step: %d\n", step);
+        printf("Difference: %.6f\n", totalDiff);
+        if(totalDiff <= EPSILON) break;
+        
+    // update iteration variables
+
+    totalDiff = 0;
 	#pragma omp for	
 	for(i=0; i<N; i++){
 		r[i] = nextR[i];
+        nextR[i] = 0;
 	}
-	stop = 1;
         step++;
     }
 
@@ -103,9 +107,7 @@ void normalize(matrix P);
     for(i=0; i<N ; i++){
         printf("ranks[%d]=%.6f\n", i, nextR[i]);
     }
-    for(i=0; i<N ; i++){
-        printf("ranks[%d]=%.6f\n", i, r[i]);
-    }
+    
     
     // free unused heap memory
     /*free(P.rowstarts);
@@ -157,14 +159,19 @@ int readinputs(FILE *fptr, int *rowstarts, float *values, int *colindices){
 
 void normalize(matrix P){
 	int i,k;
+    
+    int colsum[N];
+    
 	for(k=0;k<N;k++){
-		float rowsum = 0;
 		for(i=P.rowstarts[k]; i<P.rowstarts[k+1]; i++){
-			rowsum += P.values[i];
+			colsum[P.colindices[i]] += P.values[i];
 		}
+	}	
+    for(k=0;k<N;k++){
 		for(i=P.rowstarts[k]; i<P.rowstarts[k+1]; i++){
-			P.values[i] = P.values[i]/rowsum;
+			P.values[i] /= colsum[P.colindices[i]];
 		}
 	}
+
 }
 
