@@ -34,8 +34,7 @@ void normalize(matrix P);
     float * r = (float*)calloc(N, sizeof(float));
     float * nextR = (float*)calloc(N, sizeof(float));
     
-    int i, j, k, step;
-    float totalDiff = 0;
+    int i, j, k, step, stop;
 
     // read matrix file
     FILE *fptr;
@@ -61,24 +60,27 @@ void normalize(matrix P);
     srand((unsigned) time(&t));
     float t0,t1;
     step = 1;
-    
+    stop = 1;
     while(1){
         #pragma omp parallel shared(P, r, nextR) private(i, j, k)
         {
             t0 = omp_get_wtime();
 
             // calculate nextR
-            #pragma omp for 
+            #pragma omp for
             for(i=0; i<N; i++){
             	for(k=P.rowstarts[i]; k<P.rowstarts[i+1]; k++){
                 	nextR[i] = nextR[i] + ALPHA*P.values[k]*r[P.colindices[k]] + (1-ALPHA)*1;
                 }
             }
 
-            // calculate totalDiff to compare with epsilon
-            #pragma omp for reduction(+:totalDiff)
+            // calculate difference to compare with epsilon
+            #pragma omp for
             for(i=0; i<N; i++){
-                totalDiff +=  fabs( nextR[i] - r[i] );
+                if( fabs( nextR[i] - r[i] ) > EPSILON){
+			stop = 0;
+			//break;
+		}
             }
 
             t1 = omp_get_wtime();
@@ -86,16 +88,14 @@ void normalize(matrix P);
         } // end of parallel section
 
         printf("Step: %d\n", step);
-        printf("%.6f\n", totalDiff);
-
-        if(totalDiff <= EPSILON) break;
-        
-        // free unused heap memory
-        free(r);
+        if(stop == 1) break;
         
         // update iteration variables
-        r = nextR;
-        totalDiff = 0;
+	#pragma omp for	
+	for(i=0; i<N; i++){
+		r[i] = nextR[i];
+	}
+	stop = 1;
         step++;
     }
 
@@ -103,12 +103,16 @@ void normalize(matrix P);
     for(i=0; i<N ; i++){
         printf("ranks[%d]=%.6f\n", i, nextR[i]);
     }
+    for(i=0; i<N ; i++){
+        printf("ranks[%d]=%.6f\n", i, r[i]);
+    }
     
     // free unused heap memory
     /*free(P.rowstarts);
     free(P.colindices);
     free(P.values);*/
     free(r);
+    free(nextR);
  }
 
 int readinputs(FILE *fptr, int *rowstarts, float *values, int *colindices){
