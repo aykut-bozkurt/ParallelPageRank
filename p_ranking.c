@@ -23,7 +23,7 @@ int readinputs(FILE *fptr, int *rowstarts, float *values, int *colindices);
 
 void normalize(matrix P);
 
-// ALGORITHM => r(t+1) = alpha*P*r + (1-alpha)*c ; c = r = [1,...,1] ; alpha = 0.2
+// ALGORITHM => r(t+1) = alpha*P*r(t) + (1-alpha)*c ; c = r(0) = [1,...,1] ; alpha = 0.2
  int main() {
 
     matrix P;
@@ -68,16 +68,12 @@ void normalize(matrix P);
             t0 = omp_get_wtime();
 
             // calculate nextR
-            //#pragma omp for 
-	     #pragma omp single
-	     {
-             for(i=0; i<N; i++){
-                 for(k=P.rowstarts[i]; k<P.rowstarts[i+1]; k++){
-                     nextR[i] = nextR[i] + ALPHA*P.values[k]*1 + (1-ALPHA);
-                 }
-                 //nextR[i] = nextR[i] + (1-ALPHA)/N;
-             }
-	    }
+            #pragma omp for 
+            for(i=0; i<N; i++){
+            	for(k=P.rowstarts[i]; k<P.rowstarts[i+1]; k++){
+                	nextR[i] = nextR[i] + ALPHA*P.values[k]*r[P.colindices[k]] + (1-ALPHA)*1;
+                }
+            }
 
             // calculate totalDiff to compare with epsilon
             #pragma omp for reduction(+:totalDiff)
