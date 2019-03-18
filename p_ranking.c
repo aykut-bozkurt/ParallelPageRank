@@ -8,6 +8,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <sstream>
 
 #include <string>
 
@@ -46,8 +47,14 @@ void printtop5rank(float *r, matrix *P, int N);
 void write_ranks_to_file(float *r, matrix *P, int N);
 
  int main(int argc, char* argv[]) {
-    int chunk_size = atoi(argv[1]);
-    string schedule_method = argv[2];
+    int test_no = atoi(argv[1]);
+    int chunk_size = atoi(argv[2]);
+    string schedule_method = argv[3];
+
+    stringstream csv_stream;
+    csv_stream << test_no << ", ";
+    csv_stream << schedule_method << ", ";
+    csv_stream << chunk_size << ", ";
 
     matrix *P;
     
@@ -68,18 +75,23 @@ void write_ranks_to_file(float *r, matrix *P, int N);
     // normalize P matrix values (each column sum = 1.0 total probability)
     normalize(P);
 
+
+    float thread_timings[8];
+    int tid;
     /* Some initializations */
     for (i=0; i<N; i++) {
         r[i] = 1.0/N;
+    }
+    for(i=0; i<8; i++){
+	thread_timings[i] = 0;
     }
 
     time_t t;
     srand((unsigned) time(&t));
     float t0,t1;
     step = 1;
-    
     while(1){
-        #pragma omp parallel shared(P, r, nextR, N, chunk_size, schedule_method) private(i, j, k) num_threads(8)
+        #pragma omp parallel shared(P, r, nextR, N, chunk_size, schedule_method, thread_timings) private(i, j, k, t0, t1, tid) num_threads(8)
         {
             t0 = omp_get_wtime();
 			
@@ -99,7 +111,9 @@ void write_ranks_to_file(float *r, matrix *P, int N);
             }
 
             t1 = omp_get_wtime();
-            printf("Thread%d spent %f secs in the parallel region.\n", omp_get_thread_num(), t1-t0);
+	    tid = omp_get_thread_num();
+	    thread_timings[tid] += (t1-t0);
+            printf("Thread%d spent %f secs in the parallel region.\n", tid, thread_timings[tid]);
         } // end of parallel section
         
         
@@ -115,12 +129,28 @@ void write_ranks_to_file(float *r, matrix *P, int N);
 	}
         step++;
     }
+
+    csv_stream << step << ", |";
+    for(int i=0; i<8; i++){
+	csv_stream << thread_timings[i] << "|";
+    }
+    csv_stream << endl;
 	
     // output top 5 ranks
     printtop5rank(r, P, N);
 	
     // write all ranks to rank.txt
     write_ranks_to_file(r, P, N);
+
+    // write test results to csv file
+    ofstream csvfile;
+    csvfile.open ("testresults.csv", ios_base::app);
+    if(test_no == 1) {
+	csvfile << "Test No, Scheduling Method, Chunk Size, No. of iterations, Timings in secs for each number of threads" << endl;
+	csvfile << ",,,, |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |" << endl;
+    }
+    csvfile << csv_stream.str();
+    csvfile.close();
 
     // free unused heap memory
     free(P->rowstarts);
