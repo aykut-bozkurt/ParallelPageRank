@@ -8,7 +8,6 @@
 
 #include <iostream>
 #include <fstream>
-#include <sstream>
 
 #include <string>
 
@@ -146,14 +145,12 @@ matrix * constructCSRMatrix(){
 	int steps = 0;
 	string first_node(26,'0');
 	string second_node(26,'0');
-	string line(53,'0');
 	string token(26,'0');
-	while(getline(myfile,line))
+	while(!myfile.eof())
 	{
-    		stringstream lineStream(line);
     		for(int i=0;i<2;i++)
     		{
-			lineStream >> token;
+			myfile >> token;
         		if(i == 0) {
 				first_node = token;
 			}
