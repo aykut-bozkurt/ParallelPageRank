@@ -1,24 +1,30 @@
 #include <omp.h>
+
 #include <math.h>
+
 #include <stdio.h>
+
 #include <stdlib.h>
-#include <stdio.h>
-#include <time.h>
-#include <map>
-#include <vector>
+
 #include <iostream>
 #include <fstream>
-#include <string>
-#include <exception>
-#include <time.h>
-#include <queue>
+#include <sstream>
 
-#define TOKEN_LENGTH 26
+#include <string>
+
+#include <exception>
+
+#include <time.h>
+
+#include <queue>
+#include <map>
+#include <vector>
+
  
-//#define N 5
 #define ALPHA 0.8
 #define EPSILON 0.000001
 
+// ALGORITHM => r(t+1) = alpha*P*r(t) + (1-alpha)*c ; c = r(0) = [1,...,1] ; alpha = 0.2
 using namespace std;
 
 typedef struct CSRMatrix matrix;
@@ -32,47 +38,41 @@ struct CSRMatrix {
    vector<string> *node_list; 
 };
 
-matrix * constructCSRMatrix(FILE *fptr);
+matrix * constructCSRMatrix();
 
 void normalize(matrix *P);
 
-// ALGORITHM => r(t+1) = alpha*P*r(t) + (1-alpha)*c ; c = r(0) = [1,...,1] ; alpha = 0.2
- int main() {
-	 
+void printtop5rank(float *r, matrix *P, int N);
+
+void write_ranks_to_file(float *r, matrix *P, int N);
+
+ int main(int argc, char* argv[]) {
+    int chunk_size = atoi(argv[1]);
+    string schedule_method = argv[2];
+
     matrix *P;
-    
-    
     
     int i, j, k, step;
     float totalDiff;
-	int N;
-    // read matrix file
-    FILE *fptr;
-    fptr = fopen("../graph.txt","r");
-    if(fptr == NULL)
-    {
-            printf("File not found!");
-            exit(1);
-    }
+    int N;
 
-    P = constructCSRMatrix(fptr);
-	N = P->n_nodes;
-    fclose(fptr);
+    // read graph.txt and construct CSR matrix 
+    P = constructCSRMatrix();
+
+    // total number of vertices
+    N = P->n_nodes;
+   
+    // current and next rank matrices
     float * r = (float*)calloc(N, sizeof(float));
     float * nextR = (float*)calloc(N, sizeof(float));
-    // normalize P matrix values (each row sum = 1.0 total probability)
+
+    // normalize P matrix values (each column sum = 1.0 total probability)
     normalize(P);
-	
-	printf("Normalized");
 
     /* Some initializations */
     for (i=0; i<N; i++) {
         r[i] = 1.0/N;
     }
-	
-	/*for (i=0; i<P->n_edges; i++) {
-       printf("valu: %.6f \n ", P->values[i]);
-    }*/
 
     time_t t;
     srand((unsigned) time(&t));
@@ -80,24 +80,22 @@ void normalize(matrix *P);
     step = 1;
     
     while(1){
-        #pragma omp parallel shared(P, r, nextR, N	) private(i, j, k)
+        #pragma omp parallel shared(P, r, nextR, N, chunk_size, schedule_method) private(i, j, k) num_threads(8)
         {
             t0 = omp_get_wtime();
 			
             // calculate nextR
-            #pragma omp for
+            #pragma omp for schedule(dynamic,chunk_size)
             for(i=0; i<N; i++){
             	for(k=P->rowstarts[i]; k<P->rowstarts[i+1]; k++){
                 	nextR[i] += ALPHA*P->values[k]*r[P->colindices[k]];
                 }
-				//printf("Next R at i: %f \n ", nextR[i]);
                 nextR[i] += (1-ALPHA)/N;
-				//printf("Next R at i: %f \n ", nextR[i]);
             }
 
-			// calculate difference to compare with epsilon
-            #pragma omp for reduction (+:totalDiff)
-			for(i=0; i<N; i++){
+	    // calculate difference to compare with epsilon
+            #pragma omp for reduction (+:totalDiff) schedule(dynamic,chunk_size)
+	    for(i=0; i<N; i++){
                 totalDiff += fabs(r[i]-nextR[i]);
             }
 
@@ -110,104 +108,60 @@ void normalize(matrix *P);
         printf("Difference: %.6f\n", totalDiff);
         if(totalDiff <= EPSILON) break;
         
-    // update iteration variables
-
-		totalDiff = 0;	
-		for(i=0; i<N; i++){
-			r[i] = nextR[i];
-			nextR[i] = 0;
-		}
+        // update iteration variables
+	totalDiff = 0;	
+	for(i=0; i<N; i++){
+		r[i] = nextR[i];
+		nextR[i] = 0;
+	}
         step++;
     }
-		
-	ofstream myfile;
-	myfile.open("ranks.txt");
 	
-    printf("Resultant Ranks\n");
-	for(i=0; i<N ; i++){
-		//printf("ranks[%d]=%.10f\n", i, r[i]);
-		myfile << "ranks[" << (*(P->node_list))[i] << "]=" << r[i] << endl;
-		
-	}
-    
-	// Find 5 largest ranks
-	priority_queue<pair<float, string>, vector< pair<float, string> > ,greater< pair<float, string> > > q; 
+    // output top 5 ranks
+    printtop5rank(r, P, N);
 	
-	for(int i=0; i<N; i++) {
-		float rank = r[i];
-		string name = (*(P->node_list))[i];
-		
-		if(i<5){
-			q.push(make_pair(rank,name));
-		}
-		else {
-			float smallest = q.top().first;
-			if(rank>smallest) {
-				q.pop();
-				q.push(make_pair(rank,name));
-			}
-		}
-	}
-	
-	printf("5 largest elements: \n");
-	for (int i=0; i<5; i++){
-		pair<float,string> front = q.top();
-		float value = front.first;
-		string name = front.second;
-		
-		q.pop();
-		
-		//printf("Name %s, Rank %.10f \n", name,value);
-		cout << "Name " << name << " Rank " << value << endl;
-	}
-	
-    
+    // write all ranks to rank.txt
+    write_ranks_to_file(r, P, N);
+
     // free unused heap memory
-    /*free(P.rowstarts);
-    free(P.colindices);
-    free(P.values);*/
+    free(P->rowstarts);
+    free(P->colindices);
+    free(P->values);
+    free(P);
     free(r);
     free(nextR);
  }
 
-matrix * constructCSRMatrix(FILE *fp){
-	
-    map<string,int> index_map;
+matrix * constructCSRMatrix(){
+	map<string,int> index_map;
 	map<int, vector<int>* > adj_map;
 	
 	int first_index, second_index;
 	int last_index = 0;
 	vector<int>* neighbours;
 	vector<string>* node_list = new vector<string>();
-	char ch;
-	
-	char first_node[TOKEN_LENGTH+1];
-	char second_node[TOKEN_LENGTH+1];
-	
-	int steps = 0;
-	
-	ch = fgetc(fp);
 
-	while (ch!=EOF) {
-		first_node[0] = ch;
-		for (int i=1; i<TOKEN_LENGTH; i++){
-			ch = fgetc(fp);
-			first_node[i] = ch;
-		}
-		
-		first_node[TOKEN_LENGTH] = '\0';
-		
-		ch = fgetc(fp);	// read empty delimiter
-		
-		for (int i=0; i<TOKEN_LENGTH; i++){
-			ch = fgetc(fp);
-			second_node[i] = ch;
-		}
-		second_node[TOKEN_LENGTH] = '\0';
-		
-		ch = fgetc(fp); // read newline
-		ch = fgetc(fp); // read next character or EOF
-		
+	ifstream myfile ("graph.txt");
+
+	int steps = 0;
+	string first_node(26,'0');
+	string second_node(26,'0');
+	string line(53,'0');
+	string token(26,'0');
+	while(getline(myfile,line))
+	{
+    		stringstream lineStream(line);
+    		for(int i=0;i<2;i++)
+    		{
+			lineStream >> token;
+        		if(i == 0) {
+				first_node = token;
+			}
+			else {
+				second_node = token;
+			}
+    		}
+
 		try {
 			first_index = index_map.at(first_node); 
 		}
@@ -241,14 +195,11 @@ matrix * constructCSRMatrix(FILE *fp){
 		}
 		neighbours->push_back(first_index);
 		
-		
-		
-		
 		steps += 1;
-
-		//break;
 	}
-	
+
+	myfile.close();
+
 	int *rowstarts = new int[last_index+1];
 	int  *colindices = new int[steps];
 	float *values = new float[steps];
@@ -281,28 +232,68 @@ matrix * constructCSRMatrix(FILE *fp){
 	P->n_edges = steps;
 	P->n_nodes = last_index;
 	P->node_list = node_list;
-	printf("Number of nodes %d", P->n_nodes);
 	
-    return P;
+	return P;
 }
 
 void normalize(matrix * P){
-	
-	int i,k;
+    int i,k;
     
     float *colsum = new float[P->n_nodes];
-    printf("Normalizing");
-	printf("Number of nodes %d", P->n_nodes);
-	for(k=0;k<P->n_nodes;k++){
-		for(i=P->rowstarts[k]; i<P->rowstarts[k+1]; i++){
-			colsum[P->colindices[i]] += P->values[i];
-		}
-	}	
+	
     for(k=0;k<P->n_nodes;k++){
-		for(i=P->rowstarts[k]; i<P->rowstarts[k+1]; i++){
-			P->values[i] /= colsum[P->colindices[i]];
+	for(i=P->rowstarts[k]; i<P->rowstarts[k+1]; i++){
+		colsum[P->colindices[i]] += P->values[i];
+	}
+    }	
+    for(k=0;k<P->n_nodes;k++){
+	for(i=P->rowstarts[k]; i<P->rowstarts[k+1]; i++){
+		P->values[i] /= colsum[P->colindices[i]];
+	}
+    }
+
+}
+
+void printtop5rank(float* r, matrix *P, int N){
+    // Find 5 largest ranks
+    priority_queue<pair<float, string>, vector< pair<float, string> > ,greater< pair<float, string> > > q; 
+    
+    for(int i=0; i<N; i++) {
+	float rank = r[i];
+	string name = (*(P->node_list))[i];
+		
+	if(i<5){
+		q.push(make_pair(rank,name));
+	}
+	else {
+		float smallest = q.top().first;
+		if(rank>smallest) {
+			q.pop();
+			q.push(make_pair(rank,name));
 		}
 	}
+    }
+    
+    // prints top 5 rank	
+    printf("5 top rank vertices: \n");
+    for (int i=0; i<5; i++){
+	pair<float,string> front = q.top();
+	float value = front.first;
+	string name = front.second;
 
+	q.pop();
+		
+	cout << "Name " << name << " Rank " << value << endl;
+    }
+}
+
+void write_ranks_to_file(float *r, matrix *P, int N){
+    // write ranks to file
+    ofstream myfile;
+    myfile.open("ranks.txt");
+	
+    for(int i=0; i<N ; i++){
+    	myfile << "ranks[" << (*(P->node_list))[i] << "]=" << r[i] << endl;	
+    }
 }
 
