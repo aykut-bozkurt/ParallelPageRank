@@ -2,61 +2,77 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <stdio.h>
 #include <time.h>
+#include <map>
+#include <vector>
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <exception>
+#include <time.h>
+#include <queue>
+
+#define TOKEN_LENGTH 26
  
-#define N 5
-#define ALPHA 0.2
+//#define N 5
+#define ALPHA 0.8
 #define EPSILON 0.000001
+
+using namespace std;
 
 typedef struct CSRMatrix matrix;
 
 struct CSRMatrix {
-   int n_rows;
-   int n_cols;
+   int n_nodes;
+   int n_edges;
    int * rowstarts;
    int * colindices;
    float * values;
+   vector<string> *node_list; 
 };
 
-int readinputs(FILE *fptr, int *rowstarts, float *values, int *colindices);
+matrix * constructCSRMatrix(FILE *fptr);
 
-void normalize(matrix P);
+void normalize(matrix *P);
 
 // ALGORITHM => r(t+1) = alpha*P*r(t) + (1-alpha)*c ; c = r(0) = [1,...,1] ; alpha = 0.2
  int main() {
-
-    matrix P;
-    P.rowstarts = (int*)calloc(N+1, sizeof(int));
-    P.colindices = (int*)calloc(N*N, sizeof(int));
-    P.values = (float*)calloc(N*N, sizeof(float));
+	 
+    matrix *P;
     
-    float * r = (float*)calloc(N, sizeof(float));
-    float * nextR = (float*)calloc(N, sizeof(float));
+    
     
     int i, j, k, step;
     float totalDiff;
-
+	int N;
     // read matrix file
     FILE *fptr;
-    fptr = fopen("matrix.txt","r");
+    fptr = fopen("../graph.txt","r");
     if(fptr == NULL)
     {
             printf("File not found!");
             exit(1);
     }
 
-    k = readinputs(fptr, P.rowstarts, P.values, P.colindices);
+    P = constructCSRMatrix(fptr);
+	N = P->n_nodes;
     fclose(fptr);
-    
+    float * r = (float*)calloc(N, sizeof(float));
+    float * nextR = (float*)calloc(N, sizeof(float));
     // normalize P matrix values (each row sum = 1.0 total probability)
     normalize(P);
+	
+	printf("Normalized");
 
     /* Some initializations */
     for (i=0; i<N; i++) {
         r[i] = 1.0/N;
     }
-    
+	
+	/*for (i=0; i<P->n_edges; i++) {
+       printf("valu: %.6f \n ", P->values[i]);
+    }*/
 
     time_t t;
     srand((unsigned) time(&t));
@@ -64,50 +80,87 @@ void normalize(matrix P);
     step = 1;
     
     while(1){
-        #pragma omp parallel shared(P, r, nextR) private(i, j, k)
+        #pragma omp parallel shared(P, r, nextR, N	) private(i, j, k)
         {
             t0 = omp_get_wtime();
-
+			
             // calculate nextR
             #pragma omp for
             for(i=0; i<N; i++){
-            	for(k=P.rowstarts[i]; k<P.rowstarts[i+1]; k++){
-                	nextR[i] += ALPHA*P.values[k]*r[P.colindices[k]];
+            	for(k=P->rowstarts[i]; k<P->rowstarts[i+1]; k++){
+                	nextR[i] += ALPHA*P->values[k]*r[P->colindices[k]];
                 }
-
+				//printf("Next R at i: %f \n ", nextR[i]);
                 nextR[i] += (1-ALPHA)/N;
+				//printf("Next R at i: %f \n ", nextR[i]);
             }
 
-            
+			// calculate difference to compare with epsilon
+            #pragma omp for reduction (+:totalDiff)
+			for(i=0; i<N; i++){
+                totalDiff += fabs(r[i]-nextR[i]);
+            }
 
             t1 = omp_get_wtime();
             printf("Thread%d spent %f secs in the parallel region.\n", omp_get_thread_num(), t1-t0);
         } // end of parallel section
         
-        // calculate difference to compare with epsilon
-            for(i=0; i<N; i++){
-                totalDiff += fabs(r[i]-nextR[i]);
-            }
+        
         printf("Step: %d\n", step);
         printf("Difference: %.6f\n", totalDiff);
         if(totalDiff <= EPSILON) break;
         
     // update iteration variables
 
-    totalDiff = 0;
-	#pragma omp for	
-	for(i=0; i<N; i++){
-		r[i] = nextR[i];
-        nextR[i] = 0;
-	}
+		totalDiff = 0;	
+		for(i=0; i<N; i++){
+			r[i] = nextR[i];
+			nextR[i] = 0;
+		}
         step++;
     }
-
+		
+	ofstream myfile;
+	myfile.open("ranks.txt");
+	
     printf("Resultant Ranks\n");
-    for(i=0; i<N ; i++){
-        printf("ranks[%d]=%.6f\n", i, nextR[i]);
-    }
+	for(i=0; i<N ; i++){
+		//printf("ranks[%d]=%.10f\n", i, r[i]);
+		myfile << "ranks[" << (*(P->node_list))[i] << "]=" << r[i] << endl;
+		
+	}
     
+	// Find 5 largest ranks
+	priority_queue<pair<float, string>, vector< pair<float, string> > ,greater< pair<float, string> > > q; 
+	
+	for(int i=0; i<N; i++) {
+		float rank = r[i];
+		string name = (*(P->node_list))[i];
+		
+		if(i<5){
+			q.push(make_pair(rank,name));
+		}
+		else {
+			float smallest = q.top().first;
+			if(rank>smallest) {
+				q.pop();
+				q.push(make_pair(rank,name));
+			}
+		}
+	}
+	
+	printf("5 largest elements: \n");
+	for (int i=0; i<5; i++){
+		pair<float,string> front = q.top();
+		float value = front.first;
+		string name = front.second;
+		
+		q.pop();
+		
+		//printf("Name %s, Rank %.10f \n", name,value);
+		cout << "Name " << name << " Rank " << value << endl;
+	}
+	
     
     // free unused heap memory
     /*free(P.rowstarts);
@@ -117,59 +170,137 @@ void normalize(matrix P);
     free(nextR);
  }
 
-int readinputs(FILE *fptr, int *rowstarts, float *values, int *colindices){
-    char *token;
-    const char* delim = " ";
-    char * line;
-    size_t len = 0;
-    ssize_t read = 0;
-    
-    int k = 0;
-    int l = 0;
-    int m = 0;
-    int linecount = 0;
-    int tokencount = 0;
-    while((read = getline(&line, &len, fptr)) != -1){
-        printf("%s", line);
-        token = strtok(line, delim);
-        linecount++;
-        while(token != NULL){
-            if(strcmp(token, "[") != 0 && strcmp(token, "]") != 0 && strcmp(token, "row_begin") != 0 && strcmp(token, "col_indices") != 0 && strcmp(token, "values") != 0 && strcmp(token, "=") != 0) {
-                if(linecount == 1){
-                    rowstarts[k] = atoi(token);
-                    k++;
-                }
-                else if(linecount == 2){
-                    values[l] = (float) atoi(token);
-                    l++;
-                }
-                else if(linecount == 3){
-                    colindices[m] = atoi(token);
-                    m++;
-                }   
-            }
-            token = strtok(NULL, " ");
-        }
-    }
+matrix * constructCSRMatrix(FILE *fp){
+	
+    map<string,int> index_map;
+	map<int, vector<int>* > adj_map;
+	
+	int first_index, second_index;
+	int last_index = 0;
+	vector<int>* neighbours;
+	vector<string>* node_list = new vector<string>();
+	char ch;
+	
+	char first_node[TOKEN_LENGTH+1];
+	char second_node[TOKEN_LENGTH+1];
+	
+	int steps = 0;
+	
+	ch = fgetc(fp);
 
-    if(line != NULL) free(line);
+	while (ch!=EOF) {
+		first_node[0] = ch;
+		for (int i=1; i<TOKEN_LENGTH; i++){
+			ch = fgetc(fp);
+			first_node[i] = ch;
+		}
+		
+		first_node[TOKEN_LENGTH] = '\0';
+		
+		ch = fgetc(fp);	// read empty delimiter
+		
+		for (int i=0; i<TOKEN_LENGTH; i++){
+			ch = fgetc(fp);
+			second_node[i] = ch;
+		}
+		second_node[TOKEN_LENGTH] = '\0';
+		
+		ch = fgetc(fp); // read newline
+		ch = fgetc(fp); // read next character or EOF
+		
+		try {
+			first_index = index_map.at(first_node); 
+		}
+		catch (exception e){
+			
+			index_map.insert(pair<string, int>(first_node, last_index));
+			
+			first_index = last_index;
+			node_list->push_back(first_node);
+			last_index += 1;
+		}
+		
+		try {
+			second_index = index_map.at(second_node); 
+		}
+		catch (exception e){
+			
+			index_map.insert(pair<string, int>(second_node, last_index));
+			
+			second_index = last_index;
+			node_list->push_back(second_node);
+			last_index += 1;
+		}
+		
+		try {
+			neighbours = adj_map.at(second_index); 
+		}
+		catch (exception e){
+			neighbours = new vector<int>();
+			adj_map.insert(make_pair(second_index, neighbours));
+		}
+		neighbours->push_back(first_index);
+		
+		
+		
+		
+		steps += 1;
 
-    return k;
+		//break;
+	}
+	
+	int *rowstarts = new int[last_index+1];
+	int  *colindices = new int[steps];
+	float *values = new float[steps];
+	
+	int last_row_idx = 0;
+	rowstarts[0] = last_row_idx;
+	
+	for (int i=0; i<last_index; i++){
+		try {
+			neighbours = adj_map.at(i);
+			
+			for (int j=0; j<neighbours->size(); j++) {
+				colindices[last_row_idx+j] = (*neighbours)[j];
+				values[last_row_idx+j] = 1;
+			}
+			
+			last_row_idx += neighbours->size();
+			rowstarts[i+1] = last_row_idx;
+			
+		}
+		catch (exception e){
+			rowstarts[i+1] = last_row_idx;
+		}
+	}
+	
+	matrix * P = (matrix*)malloc(1*sizeof(matrix));
+	P->colindices = colindices;
+	P->rowstarts = rowstarts;
+	P->values = values;
+	P->n_edges = steps;
+	P->n_nodes = last_index;
+	P->node_list = node_list;
+	printf("Number of nodes %d", P->n_nodes);
+	
+    return P;
 }
 
-void normalize(matrix P){
+void normalize(matrix * P){
+	
 	int i,k;
     
-    int colsum[N];
-    
-	for(k=0;k<N;k++){
-		for(i=P.rowstarts[k]; i<P.rowstarts[k+1]; i++){
-			colsum[P.colindices[i]] += P.values[i];
+    float *colsum = new float[P->n_nodes];
+    printf("Normalizing");
+	printf("Number of nodes %d", P->n_nodes);
+	for(k=0;k<P->n_nodes;k++){
+		for(i=P->rowstarts[k]; i<P->rowstarts[k+1]; i++){
+			colsum[P->colindices[i]] += P->values[i];
 		}
 	}	
-    for(k=0;k<N;k++){
-		for(i=P.rowstarts[k]; i<P.rowstarts[k+1]; i++){
-			P.values[i] /= colsum[P.colindices[i]];
+    for(k=0;k<P->n_nodes;k++){
+		for(i=P->rowstarts[k]; i<P->rowstarts[k+1]; i++){
+			P->values[i] /= colsum[P->colindices[i]];
 		}
 	}
 
