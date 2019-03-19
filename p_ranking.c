@@ -96,7 +96,7 @@ void write_ranks_to_file(float *r, matrix *P, int N);
             t0 = omp_get_wtime();
 			
             // calculate nextR
-            #pragma omp for schedule(dynamic,chunk_size)
+            #pragma omp for schedule(guided,chunk_size)
             for(i=0; i<N; i++){
             	for(k=P->rowstarts[i]; k<P->rowstarts[i+1]; k++){
                 	nextR[i] += ALPHA*P->values[k]*r[P->colindices[k]];
@@ -105,7 +105,7 @@ void write_ranks_to_file(float *r, matrix *P, int N);
             }
 
 	    // calculate difference to compare with epsilon
-            #pragma omp for reduction (+:totalDiff) schedule(dynamic,chunk_size)
+            #pragma omp for reduction (+:totalDiff) schedule(guided,chunk_size)
 	    for(i=0; i<N; i++){
                 totalDiff += fabs(r[i]-nextR[i]);
             }
