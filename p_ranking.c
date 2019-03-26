@@ -21,10 +21,9 @@
 #include <vector>
 
  
-#define ALPHA 0.8
+#define ALPHA 0.2
 #define EPSILON 0.000001
 
-// ALGORITHM => r(t+1) = alpha*P*r(t) + (1-alpha)*c ; c = r(0) = [1,...,1] ; alpha = 0.2
 using namespace std;
 
 typedef struct CSRMatrix matrix;
@@ -47,18 +46,24 @@ void printtop5rank(float *r, matrix *P, int N);
 void write_ranks_to_file(float *r, matrix *P, int N);
 
  int main(int argc, char* argv[]) {
+    // read command line parameters from run.sh script
     int test_no = atoi(argv[1]);
     int chunk_size = atoi(argv[2]);
     string schedule_method = argv[3];
 
+    // string builder
     stringstream csv_stream;
     csv_stream << test_no << ", ";
     csv_stream << schedule_method << ", ";
     csv_stream << chunk_size << ", ";
 
+    // transition probabilities matrix
     matrix *P;
     
+    // iteration variables
     int i, j, k, step;
+
+    // difference that is compared to epsilon at each iteration
     float totalDiff;
     int N;
 
@@ -76,8 +81,12 @@ void write_ranks_to_file(float *r, matrix *P, int N);
     normalize(P);
 
 
+    // timing array for each thread
     float thread_timings[8];
+
+    // thread id
     int tid;
+
     /* Some initializations */
     for (i=0; i<N; i++) {
         r[i] = 1.0/N;
@@ -96,7 +105,7 @@ void write_ranks_to_file(float *r, matrix *P, int N);
             t0 = omp_get_wtime();
 			
             // calculate nextR
-            #pragma omp for schedule(guided,chunk_size)
+            #pragma omp for
             for(i=0; i<N; i++){
             	for(k=P->rowstarts[i]; k<P->rowstarts[i+1]; k++){
                 	nextR[i] += ALPHA*P->values[k]*r[P->colindices[k]];
@@ -105,7 +114,7 @@ void write_ranks_to_file(float *r, matrix *P, int N);
             }
 
 	    // calculate difference to compare with epsilon
-            #pragma omp for reduction (+:totalDiff) schedule(guided,chunk_size)
+            #pragma omp for reduction (+:totalDiff)
 	    for(i=0; i<N; i++){
                 totalDiff += fabs(r[i]-nextR[i]);
             }
@@ -128,8 +137,9 @@ void write_ranks_to_file(float *r, matrix *P, int N);
 		nextR[i] = 0;
 	}
         step++;
-    }
+    } // end of while (algorithm converged)
 
+    // append thread timings into string builder
     csv_stream << step << ", |";
     for(int i=0; i<8; i++){
 	csv_stream << thread_timings[i] << "|";
