@@ -6,7 +6,7 @@
 #include <sstream>
 #include <string>
 #include <exception>
-#include <time.h>
+#include <chrono>
 #include <math.h>
 
 #include <queue>
@@ -18,6 +18,7 @@
 
 #include <mpi.h>
 #include <metis.h>
+
 
  
 #define ALPHA 0.2
@@ -88,27 +89,17 @@ int main(int argc, char* argv[]) {
 		cout << "Reading graph from disk." << endl;
 		P = constructCSRMatrix(filename);
 
-		//goto jmp;
-
-		// normalize P :D
 		normalize(P);
-
-		for (int i = 0; i < P->n_edges; ++i)
-		{
-			//cout << P->values[i] << " ";
-		}
-		cout << endl;
 
 		// partition the graph into N subgraphs
 		cout << "Computing graph partition." << endl;
 		partition = getPartition(P, numprocs);
 
-		//partition[0] = 0;
-		//partition[1] = 1;
-		//partition[2] = 2;
-
 
 		cout << "Compute matrix splits." << endl;
+
+		/* We re-order arrays of the matrix in accordance to 
+		the partition so that they can be easily send with Scatterv.*/
 		tuple<matrix*,int*,int*,int*> results  = splitMatrix(P, numprocs, partition);
 		Q = get<0>(results);
 		nodes = get<1>(results);
@@ -186,10 +177,9 @@ int main(int argc, char* argv[]) {
 	int* colindices = new int[nedges];
 	float* values = new float[nedges];
 	
-
+	/* Because OpenMPI Scatter function seems to hanging for large message sizes, 
+	we send the messages in chucks given by buffer size. */
 	int buffer_size = 64000;
-
-	///MPI_Barrier(MPI_COMM_WORLD);
 
 	TMPI_Scatterv_buffered(nodes, node_counts, node_offsets, MPI_INT, local_nodes, nnodes, MPI_INT, 0, MPI_COMM_WORLD, buffer_size);
 	TMPI_Scatterv_buffered(Q->rowstarts, node_counts, node_offsets, MPI_INT, rowstarts, nnodes, MPI_INT, 0, MPI_COMM_WORLD, buffer_size);
@@ -201,20 +191,9 @@ int main(int argc, char* argv[]) {
 	// MPI_Scatterv(Q->colindices, edge_counts, edge_offsets, MPI_INT, colindices, nedges, MPI_INT, 0, MPI_COMM_WORLD);
 	// MPI_Scatterv(Q->values, edge_counts, edge_offsets, MPI_FLOAT, values, nedges, MPI_FLOAT, 0, MPI_COMM_WORLD);
 
-	
-
-	//cout << "mypid=" << mypid << ", partition size=" << nnodes << ", edge size=" << nedges << " last elem: " << local_nodes[nnodes-1] << endl;
-	//cout << "mypid " << mypid << " rowstarts[" << 0 << "] " << rowstarts[0] << " rowstarts[" << -1 << "] " << rowstarts[nnodes-1] << " offset: "  << edge_start << endl;
-
-	int max_col_idx = 0;
-		for (int i=0; i<nedges; i++){
-			int idx = colindices[i];
-			if(idx>max_col_idx)
-				max_col_idx = idx;
-		}
-	//cout << "id: " << mypid << " Max col idx: " << max_col_idx << endl;
-	
+		
 	// Re-order nodes & find neighbors
+
 	unordered_map<int,int> index_map;
 	float* send_buffer;
 	float* recv_buffer;
@@ -224,6 +203,11 @@ int main(int argc, char* argv[]) {
 	int recv_offsets[numprocs];
 	set<int> send_map[numprocs];
 	set<int> recv_map[numprocs];
+
+	/* We re-index nodes occurring in the colindices array 
+	so that nodes that are in our partition come before the 
+	foreign nodes. We replace the new local index values with 
+	the old ones to speed up main loop. */
 
 	cout << "Initialize local arrays..." << endl;
 	for(int i=0; i<nnodes; i++) {
@@ -258,6 +242,12 @@ int main(int argc, char* argv[]) {
 		last_col_idx = rowstarts[i];
 	}
 
+	/* Each processor calculates which nodes it needs from 
+	every other partition and which nodes it needs to send.
+	Note that ranks will be put in the order of global ranks
+	so that node order of send buffer of the sending processor
+	matches the order of send buffer of the sending processor. */
+
 	cout << "Create send-recieve maps, mypid " << mypid << endl;
 
 	int total_send = 0;
@@ -281,6 +271,7 @@ int main(int argc, char* argv[]) {
 	send_buffer = new float[total_send];
 	recv_buffer = new float[total_recv];
 
+	// initialize local rank arrays
 	float* ranks = new float[nnodes]();
 	float* old_ranks = new float[nnodes + total_recv];
 
@@ -300,12 +291,18 @@ int main(int argc, char* argv[]) {
 	}
 
 	cout << "id: " << mypid << " last_index: " << last_index << " total_recv " << total_recv << " total_send " << total_send<< " nnodes " << nnodes << endl;
+	
+	// Main Iteration
+
 	float prob;
 	int node_idx;
 	int converged = 0;
 	int iter_cnt = 0;
 
 	MPI_Barrier(MPI_COMM_WORLD);
+
+	auto start = std::chrono::steady_clock::now( );
+
 
 	while(!converged && iter_cnt<100) {
 		// Fill send buffer	
@@ -379,6 +376,10 @@ int main(int argc, char* argv[]) {
 	}
 
 	MPI_Barrier(MPI_COMM_WORLD);
+
+	auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::steady_clock::now( ) - start );
+    cout << "Operation took " << elapsed.count() << " millisecs on processor	" << mypid << endl;
+
 	MPI_Finalize();
 
 	if(mypid==0) {
@@ -576,6 +577,11 @@ int* getPartition(matrix* P, int nparts) {
 	return part;
 }
 
+/* Re-order arrays of the matrix so that the in all arrays 
+values corresponding to nodes from the first partition occur 
+first, then the values for the second partition come after 
+those for the first partition etc. After this operation we 
+can easily send the arrays using Scatterv. */ 
 tuple<matrix*,int*, int*,int*> splitMatrix(matrix* P, int nparts, int* partition) {
 	int nvertices = P->n_nodes;
 	int nedges = P->n_edges;
@@ -647,6 +653,9 @@ int* calculateOffsets(int size, const int* counts) {
 	return offsets;
 }
 
+/* Break a Scatterv call into several calls so that the 
+number elements send from the root to one vertex is always 
+smaller or equal to buffer size. */
 int TMPI_Scatterv_buffered(const void *sendbuf, const int *sendcounts, const int *displs,
                  MPI_Datatype sendtype, void *recvbuf, int recvcount,
                  MPI_Datatype recvtype,
