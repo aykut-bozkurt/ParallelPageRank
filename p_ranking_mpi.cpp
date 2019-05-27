@@ -13,6 +13,8 @@
 #include <map>
 #include <vector>
 #include <set>
+#include <unordered_set>
+#include <unordered_map>
 
 #include <mpi.h>
 #include <metis.h>
@@ -86,7 +88,7 @@ int main(int argc, char* argv[]) {
 		cout << "Reading graph from disk." << endl;
 		P = constructCSRMatrix(filename);
 
-		
+		//goto jmp;
 
 		// normalize P :D
 		normalize(P);
@@ -160,9 +162,7 @@ int main(int argc, char* argv[]) {
 			old_global_ranks[i] = 1/total_nodes;
 			global_ranks[i] = 1/total_nodes;
 		}
-	}
-
-	
+	}	
 
 	MPI_Bcast(&total_nodes, 1 , MPI_INT, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&total_edges, 1 , MPI_INT, 0, MPI_COMM_WORLD);
@@ -187,9 +187,9 @@ int main(int argc, char* argv[]) {
 	float* values = new float[nedges];
 	
 
-	int buffer_size = 100000;
+	int buffer_size = 64000;
 
-	MPI_Barrier(MPI_COMM_WORLD);
+	///MPI_Barrier(MPI_COMM_WORLD);
 
 	TMPI_Scatterv_buffered(nodes, node_counts, node_offsets, MPI_INT, local_nodes, nnodes, MPI_INT, 0, MPI_COMM_WORLD, buffer_size);
 	TMPI_Scatterv_buffered(Q->rowstarts, node_counts, node_offsets, MPI_INT, rowstarts, nnodes, MPI_INT, 0, MPI_COMM_WORLD, buffer_size);
@@ -215,7 +215,7 @@ int main(int argc, char* argv[]) {
 	//cout << "id: " << mypid << " Max col idx: " << max_col_idx << endl;
 	
 	// Re-order nodes & find neighbors
-	map<int,int> index_map;
+	unordered_map<int,int> index_map;
 	float* send_buffer;
 	float* recv_buffer;
 	int send_cnts[numprocs];
@@ -285,19 +285,9 @@ int main(int argc, char* argv[]) {
 	float* old_ranks = new float[nnodes + total_recv];
 
 
-	for (int i = 0; i < total_recv; ++i)
-	{
-		recv_buffer[i] = -19999;
-	}
-
 	for (int i = 0; i < nnodes + total_recv; ++i)
 	{
 		old_ranks[i] = 1.0/total_nodes;
-	}
-
-	for (int i = 0; i < nnodes; ++i)
-	{
-		ranks[i] = 0;
 	}
 
 	if(mypid==0) {
@@ -327,7 +317,7 @@ int main(int argc, char* argv[]) {
 			}
 		}
 
-		MPI_Barrier(MPI_COMM_WORLD);
+		//MPI_Barrier(MPI_COMM_WORLD);
 		MPI_Alltoallv(send_buffer, send_cnts, send_offsets, MPI_FLOAT, recv_buffer, recv_cnts, recv_offsets, MPI_FLOAT, MPI_COMM_WORLD);
 
 		// Put ranks recieved from other nodes to correct places
@@ -350,7 +340,7 @@ int main(int argc, char* argv[]) {
             last_col_idx = rowstarts[i];
         }
 
-        MPI_Barrier(MPI_COMM_WORLD);
+        //MPI_Barrier(MPI_COMM_WORLD);
         MPI_Gatherv(ranks, nnodes, MPI_FLOAT, global_ranks, node_counts, node_offsets, MPI_FLOAT, 0, MPI_COMM_WORLD);
 
         if (mypid==0) {
@@ -405,9 +395,9 @@ int main(int argc, char* argv[]) {
  }
 
 matrix * constructCSRMatrix(char* filename){
-	map<string,int> index_map;
-	map<int, set<int>*> adj_map;
-	set<int>* neighbours;
+	unordered_map<string,int> index_map;
+	unordered_map<int, unordered_set<int>*> adj_map;
+	unordered_set<int>* neighbours;
 	vector<string>* node_list = new vector<string>();
 
 	int first_index, second_index;
@@ -420,11 +410,8 @@ matrix * constructCSRMatrix(char* filename){
 	string first_node;
 	string second_node;
 
-	while(!myfile.eof())
+	while(myfile >> first_node >> second_node)
 	{
-		myfile >> first_node;
-		myfile >> second_node;
-
 		//cout << first_node << " " << second_node << endl;
 
 		try {
@@ -438,7 +425,7 @@ matrix * constructCSRMatrix(char* filename){
 			node_list->push_back(first_node);
 			last_index += 1;
 
-			neighbours = new set<int>();
+			neighbours = new unordered_set<int>();
 			adj_map.insert(make_pair(first_index, neighbours));
 		}
 		
@@ -453,9 +440,10 @@ matrix * constructCSRMatrix(char* filename){
 			node_list->push_back(second_node);
 			last_index += 1;
 
-			neighbours = new set<int>();
+			neighbours = new unordered_set<int>();
 			adj_map.insert(make_pair(second_index, neighbours));
 		}
+		
 		
 		neighbours = adj_map.at(second_index);
 		if (!neighbours->count(first_index))
@@ -489,7 +477,7 @@ matrix * constructCSRMatrix(char* filename){
 				j++;
 			}
 			
-			last_row_idx += neighbours->size();
+			last_row_idx += j;
 			rowstarts[i+1] = last_row_idx;
 			
 		}
@@ -588,49 +576,6 @@ int* getPartition(matrix* P, int nparts) {
 	return part;
 }
 
-tuple<int*,int*, int*> reorderNodes(int nvertices, int* partition, int nparts) {
-	int* nodes = new int[nvertices];
-	int* offsets = new int[nparts];
-	int* part_sizes = new int[nparts];
-
-
-	vector<pair<int,int>> order;
-	for (int i=0; i<nvertices; i++) {
-		order.push_back(make_pair(partition[i], i));
-	}
-	sort(order.begin(), order.end());
-
-	
-	offsets[0] = 0;
-	int last_part = 0;
-	int last_offset = 0;
-
-	for(int i=0; i<nvertices; i++) {
-		nodes[i] = order[i].second;
-
-		while(last_part<order[i].first) {
-			last_part +=1;
-			offsets[last_part] = i;
-		}
-	}
-
-	cout <<"Node: " <<nodes[6] << endl;
-	cout << "Offset: " << offsets[3] << endl;
-
-	for (int i=0; i<nparts; i++) {
-		cout << "Offset: " << offsets[i] << endl;		
-	}
-
-	for (int i = 0; i < nparts-1; ++i) {
-		part_sizes[i] = offsets[i+1] - offsets[i-1];
-	}
-
-	part_sizes[nparts-1] = nvertices - offsets[nparts-1];
-	
-
-	return make_tuple(nodes, offsets, part_sizes);
-}
-
 tuple<matrix*,int*, int*,int*> splitMatrix(matrix* P, int nparts, int* partition) {
 	int nvertices = P->n_nodes;
 	int nedges = P->n_edges;
@@ -690,7 +635,6 @@ tuple<matrix*,int*, int*,int*> splitMatrix(matrix* P, int nparts, int* partition
 
 	return make_tuple(Q, new_nodes, node_counts, edge_counts);
 }
-
 
 int* calculateOffsets(int size, const int* counts) {
 	int * offsets = new int[size];
